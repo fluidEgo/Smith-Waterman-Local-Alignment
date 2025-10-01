@@ -112,11 +112,6 @@ Contributions are welcome! To contribute:
 5. Open a pull request.
 
 Please ensure code follows the existing style and includes tests where applicable.
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
 ## Acknowledgments
 
 - Built with [p5.js](https://p5js.org/) for canvas-based visualizations.
