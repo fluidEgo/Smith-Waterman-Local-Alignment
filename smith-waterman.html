@@ -1,43 +1,4 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -159,6 +120,7 @@
             margin-top: 10px;
             font-size: 14px;
             display: flex;
+            flex-wrap: wrap;
             gap: 20px;
         }
         @media (max-width: 600px) {
@@ -212,6 +174,9 @@
         <div id="legend">
             <span><span style="background-color: #ffff99; padding: 5px;">Yellow</span>: Current Cell</span>
             <span><span style="background-color: #ccffcc; padding: 5px;">Green</span>: Traceback Path</span>
+            <span><span style="background-color: blue; color: white; padding: 5px;">Blue Arrow</span>: Diagonal</span>
+            <span><span style="background-color: green; color: white; padding: 5px;">Green Arrow</span>: Up</span>
+            <span><span style="background-color: red; color: white; padding: 5px;">Red Arrow</span>: Left</span>
         </div>
     </div>
     <div id="matrix-display" role="region" aria-label="Scoring matrix display"></div>
@@ -225,6 +190,7 @@
         let matrix = [];
         let traceback = [];
         let calculations = [];
+        let directions = [];
         let seq1 = '';
         let seq2 = '';
         let matchScore, mismatchScore, gapScore;
@@ -275,10 +241,29 @@
                     fill(0);
                     text(matrix[r][c] || 0, x + cellSize / 2, y + cellSize / 2);
 
-                    // Draw arrows for traceback direction
-                    if (traceback[r][c] && isTraceback) {
-                        stroke(255, 0, 0);
+                    // Draw arrows for all valid directions
+                    if (directions[r][c] && r > 0 && c > 0) {
                         strokeWeight(2);
+                        if (directions[r][c].includes('diagonal')) {
+                            stroke(0, 0, 255); // Blue for diagonal
+                            line(x + cellSize / 4, y + cellSize / 4, x + 3 * cellSize / 4, y + 3 * cellSize / 4);
+                        }
+                        if (directions[r][c].includes('up')) {
+                            stroke(0, 255, 0); // Green for up
+                            line(x + cellSize / 2, y + cellSize / 4, x + cellSize / 2, y + 3 * cellSize / 4);
+                        }
+                        if (directions[r][c].includes('left')) {
+                            stroke(255, 0, 0); // Red for left
+                            line(x + cellSize / 4, y + cellSize / 2, x + 3 * cellSize / 4, y + cellSize / 2);
+                        }
+                        stroke(0);
+                        strokeWeight(1);
+                    }
+
+                    // Highlight optimal direction during traceback
+                    if (isTraceback && traceback[r][c]) {
+                        strokeWeight(3);
+                        stroke(255, 255, 0); // Yellow for optimal path
                         if (traceback[r][c] === 'diagonal') {
                             line(x + cellSize / 4, y + cellSize / 4, x + 3 * cellSize / 4, y + 3 * cellSize / 4);
                         } else if (traceback[r][c] === 'up') {
@@ -307,6 +292,7 @@
 
             matrix = Array(seq2.length + 1).fill().map(() => Array(seq1.length + 1).fill(0));
             traceback = Array(seq2.length + 1).fill().map(() => Array(seq1.length + 1).fill(''));
+            directions = Array(seq2.length + 1).fill().map(() => Array(seq1.length + 1).fill([]));
             calculations = Array(seq2.length + 1).fill().map(() => Array(seq1.length + 1).fill(''));
             tracebackPath = [];
             logEntries = [];
@@ -325,6 +311,7 @@
                 Seq1: ${seq1}<br>Seq2: ${seq2}<br>
                 The algorithm fills a matrix to find the best local alignment.<br>
                 For each cell, we compute: Max(0, Diagonal + Match/Mismatch, Up + Gap, Left + Gap).<br>
+                Arrows show all valid directions: Blue (diagonal), Green (up), Red (left).<br>
                 ${document.getElementById('mode').value === 'step' ? "Click 'Next Step' to compute cell [1,1]." : "Click 'Next Step' to start automatic computation."}</p>`;
             logEntries.push(`Initialized alignment with Seq1: ${seq1}, Seq2: ${seq2}, Match: ${matchScore}, Mismatch: ${mismatchScore}, Gap: ${gapScore}`);
             updateLog();
@@ -355,6 +342,7 @@
             let diagonal = 0, up = 0, left = 0;
             let explanation = `Computing cell [${i},${j}]:<br>`;
             let calcDetails = `Cell [${i},${j}]:<br>`;
+            let validDirections = [];
 
             if (i > 0 && j > 0) {
                 let chars = `Comparing '${seq2[i-1]}' (Seq2) and '${seq1[j-1]}' (Seq1): `;
@@ -364,6 +352,7 @@
                 calcDetails += chars + (seq1[j - 1] === seq2[i - 1] ? `Match = ${matchScore}` : `Mismatch = ${mismatchScore}`) + `<br>`;
                 explanation += `Diagonal: M[${i-1},${j-1}] + ${match} = ${matrix[i-1][j-1]} + ${match} = ${diagonal}<br>`;
                 calcDetails += `Diagonal: ${matrix[i-1][j-1]} + ${match} = ${diagonal}<br>`;
+                if (diagonal > 0) validDirections.push('diagonal');
             } else {
                 explanation += `No diagonal score (edge of matrix)<br>`;
                 calcDetails += `No diagonal score<br>`;
@@ -373,6 +362,7 @@
                 up = matrix[i - 1][j] + gapScore;
                 explanation += `Up: M[${i-1},${j}] + Gap(${gapScore}) = ${matrix[i-1][j]} + ${gapScore} = ${up}<br>`;
                 calcDetails += `Up: ${matrix[i-1][j]} + ${gapScore} = ${up}<br>`;
+                if (up > 0) validDirections.push('up');
             } else {
                 explanation += `No up score (top edge)<br>`;
                 calcDetails += `No up score<br>`;
@@ -382,6 +372,7 @@
                 left = matrix[i][j - 1] + gapScore;
                 explanation += `Left: M[${i},${j-1}] + Gap(${gapScore}) = ${matrix[i][j-1]} + ${gapScore} = ${left}<br>`;
                 calcDetails += `Left: ${matrix[i][j-1]} + ${gapScore} = ${left}<br>`;
+                if (left > 0) validDirections.push('left');
             } else {
                 explanation += `No left score (left edge)<br>`;
                 calcDetails += `No left score<br>`;
@@ -394,22 +385,23 @@
             let direction = '';
             if (matrix[i][j] === diagonal && diagonal > 0) {
                 direction = 'diagonal';
-                explanation += `Direction: Diagonal (match/mismatch)<br>`;
-                calcDetails += `Direction: Diagonal<br>`;
+                explanation += `Optimal Direction: Diagonal (match/mismatch)<br>`;
+                calcDetails += `Optimal Direction: Diagonal<br>`;
             } else if (matrix[i][j] === up && up > 0) {
                 direction = 'up';
-                explanation += `Direction: Up (gap in Seq1)<br>`;
-                calcDetails += `Direction: Up<br>`;
+                explanation += `Optimal Direction: Up (gap in Seq1)<br>`;
+                calcDetails += `Optimal Direction: Up<br>`;
             } else if (matrix[i][j] === left && left > 0) {
                 direction = 'left';
-                explanation += `Direction: Left (gap in Seq2)<br>`;
-                calcDetails += `Direction: Left<br>`;
+                explanation += `Optimal Direction: Left (gap in Seq2)<br>`;
+                calcDetails += `Optimal Direction: Left<br>`;
             } else {
                 direction = 'none';
-                explanation += `Direction: None (score set to 0)<br>`;
-                calcDetails += `Direction: None<br>`;
+                explanation += `Optimal Direction: None (score set to 0)<br>`;
+                calcDetails += `Optimal Direction: None<br>`;
             }
             traceback[i][j] = direction;
+            directions[i][j] = validDirections;
             calculations[i][j] = calcDetails.replace(/<br>/g, '\n');
 
             if (matrix[i][j] > maxScore) {
@@ -419,6 +411,7 @@
                 explanation += `New maximum score: ${maxScore} at [${maxI},${maxJ}]<br>`;
             }
 
+            explanation += `Valid directions: ${validDirections.length > 0 ? validDirections.join(', ') : 'none'}<br>`;
             explanation += `Click 'Next Step' to ${j < seq1.length ? `compute cell [${i},${j+1}]` : `compute cell [${i+1},1]`}.`;
             logEntries.push(explanation);
             updateLog();
@@ -437,7 +430,8 @@
                 explanation = `
                     <p>Matrix computation complete. Maximum score: ${maxScore} at [${maxI},${maxJ}].<br>
                     Starting traceback from cell [${maxI},${maxJ}].<br>
-                    Traceback follows the directions to build the optimal local alignment.<br>
+                    Traceback follows the optimal directions (yellow arrows) to build the alignment.<br>
+                    All valid directions (blue, green, red arrows) are shown for each cell.<br>
                     Click 'Next Step' to trace back one step.</p>`;
                 logEntries.push(explanation);
                 document.getElementById('step-info').innerHTML = explanation;
@@ -509,6 +503,9 @@
                     let isCurrent = r === i && c === j && !tracebackStep;
                     let isTraceback = tracebackPath.some(([tr, tc]) => tr === r && tc === c);
                     let tooltip = calculations[r][c] || 'No calculations yet';
+                    if (directions[r][c].length > 0) {
+                        tooltip += `\nValid directions: ${directions[r][c].join(', ')}`;
+                    }
                     table += `<td class="${isCurrent ? 'highlight' : isTraceback ? 'traceback' : ''} hoverable" title="${tooltip}">${matrix[r][c] || 0}</td>`;
                 }
                 table += '</tr>';
@@ -563,6 +560,7 @@
             matrix = [];
             traceback = [];
             calculations = [];
+            directions = [];
             tracebackPath = [];
             logEntries = [];
             i = 0;
