@@ -1,0 +1,592 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smith-Waterman Local Alignment (Interactive)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.2/p5.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #e8ecef;
+            color: #333;
+        }
+        #controls {
+            margin-bottom: 20px;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            width: 100%;
+            max-width: 600px;
+        }
+        input, button, select {
+            margin: 8px;
+            padding: 10px;
+            font-size: 16px;
+            border: 2px solid #ccc;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #28a745;
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        button:hover:not(:disabled) {
+            background-color: #218838;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        #step-info {
+            margin-top: 15px;
+            font-size: 14px;
+            max-width: 600px;
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        #matrix-display {
+            margin-top: 20px;
+            background-color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            max-width: 90%;
+            overflow-x: auto;
+        }
+        #alignment-result {
+            margin-top: 20px;
+            background-color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            max-width: 600px;
+            text-align: left;
+        }
+        #log {
+            margin-top: 20px;
+            background-color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            max-width: 600px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 14px;
+        }
+        table {
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        td, th {
+            border: 2px solid #333;
+            padding: 10px;
+            text-align: center;
+            min-width: 40px;
+        }
+        .highlight {
+            background-color: #ffff99 !important;
+        }
+        .traceback {
+            background-color: #ccffcc !important;
+        }
+        .hoverable:hover {
+            background-color: #e6e6e6;
+            cursor: pointer;
+        }
+        #progress-bar {
+            width: 100%;
+            max-width: 600px;
+            height: 20px;
+            background-color: #ddd;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        #progress {
+            height: 100%;
+            background-color: #28a745;
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+        #legend {
+            margin-top: 10px;
+            font-size: 14px;
+            display: flex;
+            gap: 20px;
+        }
+        @media (max-width: 600px) {
+            input, button, select {
+                width: 100%;
+                box-sizing: border-box;
+            }
+            #controls, #matrix-display, #alignment-result, #log {
+                width: 95%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="controls" role="region" aria-label="Input controls for Smith-Waterman alignment">
+        <div>
+            <label for="seq1">Sequence 1: </label>
+            <input type="text" id="seq1" value="HEAGAWGHEE" aria-label="First sequence input">
+        </div>
+        <div>
+            <label for="seq2">Sequence 2: </label>
+            <input type="text" id="seq2" value="PAWHEAE" aria-label="Second sequence input">
+        </div>
+        <div>
+            <label for="match">Match Score: </label>
+            <input type="number" id="match" value="2" aria-label="Match score">
+        </div>
+        <div>
+            <label for="mismatch">Mismatch Penalty: </label>
+            <input type="number" id="mismatch" value="-1" aria-label="Mismatch penalty">
+        </div>
+        <div>
+            <label for="gap">Gap Penalty: </label>
+            <input type="number" id="gap" value="-2" aria-label="Gap penalty">
+        </div>
+        <div>
+            <label for="mode">Mode: </label>
+            <select id="mode" aria-label="Alignment mode selection">
+                <option value="step">Step-by-Step</option>
+                <option value="auto">Automatic</option>
+            </select>
+        </div>
+        <button onclick="startAlignment()" aria-label="Start alignment computation">Start Alignment</button>
+        <button onclick="stepForward()" disabled id="step-btn" aria-label="Proceed to next step">Next Step</button>
+        <button onclick="resetAlignment()" aria-label="Reset alignment">Reset</button>
+        <button onclick="downloadLog()" aria-label="Download computation log">Download Log</button>
+        <div id="step-info" role="log" aria-live="polite"></div>
+        <div id="progress-bar">
+            <div id="progress" style="width: 0%"></div>
+        </div>
+        <div id="legend">
+            <span><span style="background-color: #ffff99; padding: 5px;">Yellow</span>: Current Cell</span>
+            <span><span style="background-color: #ccffcc; padding: 5px;">Green</span>: Traceback Path</span>
+        </div>
+    </div>
+    <div id="matrix-display" role="region" aria-label="Scoring matrix display"></div>
+    <div id="alignment-result" role="region" aria-label="Alignment result"></div>
+    <div id="log" role="log" aria-label="Computation log">
+        <h3>Computation Log</h3>
+        <div id="log-content"></div>
+    </div>
+
+    <script>
+        let matrix = [];
+        let traceback = [];
+        let calculations = [];
+        let seq1 = '';
+        let seq2 = '';
+        let matchScore, mismatchScore, gapScore;
+        let i = 0, j = 0;
+        let maxScore = 0, maxI = 0, maxJ = 0;
+        let stepMode = false;
+        let tracebackStep = false;
+        let aligned1 = '', aligned2 = '';
+        let tracebackPath = [];
+        let currentTraceI = 0, currentTraceJ = 0;
+        let autoInterval = null;
+        let logEntries = [];
+
+        function setup() {
+            let canvas = createCanvas(600, 400);
+            canvas.parent('matrix-display');
+            textSize(12);
+            textAlign(CENTER, CENTER);
+            canvas.canvas.setAttribute('aria-label', 'Matrix visualization');
+        }
+
+        function draw() {
+            background(255);
+            if (!stepMode || matrix.length === 0) return;
+
+            let cellSize = Math.min(30, 600 / (Math.max(seq1.length, seq2.length) + 2));
+            let offsetX = 50;
+            let offsetY = 50;
+
+            // Draw sequence labels
+            fill(0);
+            text('-', offsetX, offsetY - 20);
+            for (let k = 0; k < seq1.length; k++) {
+                text(seq1[k], offsetX + (k + 1) * cellSize, offsetY - 20);
+            }
+            for (let k = 0; k < seq2.length; k++) {
+                text(seq2[k], offsetX - 20, offsetY + (k + 1) * cellSize);
+            }
+
+            // Draw matrix and arrows
+            for (let r = 0; r <= seq2.length; r++) {
+                for (let c = 0; c <= seq1.length; c++) {
+                    let x = offsetX + c * cellSize;
+                    let y = offsetY + r * cellSize;
+                    let isTraceback = tracebackPath.some(([tr, tc]) => tr === r && tc === c);
+                    fill(isTraceback ? 'lightgreen' : (r === i && c === j && !tracebackStep ? 'yellow' : 255));
+                    rect(x, y, cellSize, cellSize);
+                    fill(0);
+                    text(matrix[r][c] || 0, x + cellSize / 2, y + cellSize / 2);
+
+                    // Draw arrows for traceback direction
+                    if (traceback[r][c] && isTraceback) {
+                        stroke(255, 0, 0);
+                        strokeWeight(2);
+                        if (traceback[r][c] === 'diagonal') {
+                            line(x + cellSize / 4, y + cellSize / 4, x + 3 * cellSize / 4, y + 3 * cellSize / 4);
+                        } else if (traceback[r][c] === 'up') {
+                            line(x + cellSize / 2, y + cellSize / 4, x + cellSize / 2, y + 3 * cellSize / 4);
+                        } else if (traceback[r][c] === 'left') {
+                            line(x + cellSize / 4, y + cellSize / 2, x + 3 * cellSize / 4, y + cellSize / 2);
+                        }
+                        stroke(0);
+                        strokeWeight(1);
+                    }
+                }
+            }
+        }
+
+        function initializeMatrix() {
+            seq1 = document.getElementById('seq1').value.toUpperCase().replace(/[^A-Z]/g, '');
+            seq2 = document.getElementById('seq2').value.toUpperCase().replace(/[^A-Z]/g, '');
+            matchScore = parseInt(document.getElementById('match').value);
+            mismatchScore = parseInt(document.getElementById('mismatch').value);
+            gapScore = parseInt(document.getElementById('gap').value);
+
+            if (!seq1 || !seq2) {
+                alert('Please enter valid sequences.');
+                return;
+            }
+
+            matrix = Array(seq2.length + 1).fill().map(() => Array(seq1.length + 1).fill(0));
+            traceback = Array(seq2.length + 1).fill().map(() => Array(seq1.length + 1).fill(''));
+            calculations = Array(seq2.length + 1).fill().map(() => Array(seq1.length + 1).fill(''));
+            tracebackPath = [];
+            logEntries = [];
+            i = 1;
+            j = 1;
+            maxScore = 0;
+            maxI = 0;
+            maxJ = 0;
+            stepMode = true;
+            tracebackStep = false;
+            aligned1 = '';
+            aligned2 = '';
+            document.getElementById('step-btn').disabled = false;
+            document.getElementById('step-info').innerHTML = `
+                <p>Starting Smith-Waterman local alignment for sequences:<br>
+                Seq1: ${seq1}<br>Seq2: ${seq2}<br>
+                The algorithm fills a matrix to find the best local alignment.<br>
+                For each cell, we compute: Max(0, Diagonal + Match/Mismatch, Up + Gap, Left + Gap).<br>
+                ${document.getElementById('mode').value === 'step' ? "Click 'Next Step' to compute cell [1,1]." : "Click 'Next Step' to start automatic computation."}</p>`;
+            logEntries.push(`Initialized alignment with Seq1: ${seq1}, Seq2: ${seq2}, Match: ${matchScore}, Mismatch: ${mismatchScore}, Gap: ${gapScore}`);
+            updateLog();
+            updateMatrixDisplay();
+            updateProgress();
+            draw();
+
+            if (document.getElementById('mode').value === 'auto') {
+                autoInterval = setInterval(stepForward, 500);
+            }
+        }
+
+        function stepForward() {
+            if (!stepMode) return;
+
+            if (!tracebackStep && i <= seq2.length) {
+                computeMatrixCell();
+            } else {
+                performTracebackStep();
+            }
+
+            if (document.getElementById('mode').value === 'auto' && !stepMode) {
+                clearInterval(autoInterval);
+            }
+        }
+
+        function computeMatrixCell() {
+            let diagonal = 0, up = 0, left = 0;
+            let explanation = `Computing cell [${i},${j}]:<br>`;
+            let calcDetails = `Cell [${i},${j}]:<br>`;
+
+            if (i > 0 && j > 0) {
+                let chars = `Comparing '${seq2[i-1]}' (Seq2) and '${seq1[j-1]}' (Seq1): `;
+                let match = seq1[j - 1] === seq2[i - 1] ? matchScore : mismatchScore;
+                diagonal = matrix[i - 1][j - 1] + match;
+                explanation += chars + (seq1[j - 1] === seq2[i - 1] ? `Match score = ${matchScore}` : `Mismatch penalty = ${mismatchScore}`) + `<br>`;
+                calcDetails += chars + (seq1[j - 1] === seq2[i - 1] ? `Match = ${matchScore}` : `Mismatch = ${mismatchScore}`) + `<br>`;
+                explanation += `Diagonal: M[${i-1},${j-1}] + ${match} = ${matrix[i-1][j-1]} + ${match} = ${diagonal}<br>`;
+                calcDetails += `Diagonal: ${matrix[i-1][j-1]} + ${match} = ${diagonal}<br>`;
+            } else {
+                explanation += `No diagonal score (edge of matrix)<br>`;
+                calcDetails += `No diagonal score<br>`;
+            }
+
+            if (i > 0) {
+                up = matrix[i - 1][j] + gapScore;
+                explanation += `Up: M[${i-1},${j}] + Gap(${gapScore}) = ${matrix[i-1][j]} + ${gapScore} = ${up}<br>`;
+                calcDetails += `Up: ${matrix[i-1][j]} + ${gapScore} = ${up}<br>`;
+            } else {
+                explanation += `No up score (top edge)<br>`;
+                calcDetails += `No up score<br>`;
+            }
+
+            if (j > 0) {
+                left = matrix[i][j - 1] + gapScore;
+                explanation += `Left: M[${i},${j-1}] + Gap(${gapScore}) = ${matrix[i][j-1]} + ${gapScore} = ${left}<br>`;
+                calcDetails += `Left: ${matrix[i][j-1]} + ${gapScore} = ${left}<br>`;
+            } else {
+                explanation += `No left score (left edge)<br>`;
+                calcDetails += `No left score<br>`;
+            }
+
+            matrix[i][j] = Math.max(0, diagonal, up, left);
+            explanation += `Cell [${i},${j}] = Max(0, Diagonal=${diagonal}, Up=${up}, Left=${left}) = ${matrix[i][j]}<br>`;
+            calcDetails += `Result: Max(0, ${diagonal}, ${up}, ${left}) = ${matrix[i][j]}<br>`;
+
+            let direction = '';
+            if (matrix[i][j] === diagonal && diagonal > 0) {
+                direction = 'diagonal';
+                explanation += `Direction: Diagonal (match/mismatch)<br>`;
+                calcDetails += `Direction: Diagonal<br>`;
+            } else if (matrix[i][j] === up && up > 0) {
+                direction = 'up';
+                explanation += `Direction: Up (gap in Seq1)<br>`;
+                calcDetails += `Direction: Up<br>`;
+            } else if (matrix[i][j] === left && left > 0) {
+                direction = 'left';
+                explanation += `Direction: Left (gap in Seq2)<br>`;
+                calcDetails += `Direction: Left<br>`;
+            } else {
+                direction = 'none';
+                explanation += `Direction: None (score set to 0)<br>`;
+                calcDetails += `Direction: None<br>`;
+            }
+            traceback[i][j] = direction;
+            calculations[i][j] = calcDetails.replace(/<br>/g, '\n');
+
+            if (matrix[i][j] > maxScore) {
+                maxScore = matrix[i][j];
+                maxI = i;
+                maxJ = j;
+                explanation += `New maximum score: ${maxScore} at [${maxI},${maxJ}]<br>`;
+            }
+
+            explanation += `Click 'Next Step' to ${j < seq1.length ? `compute cell [${i},${j+1}]` : `compute cell [${i+1},1]`}.`;
+            logEntries.push(explanation);
+            updateLog();
+
+            j++;
+            if (j > seq1.length) {
+                j = 1;
+                i++;
+            }
+
+            if (i > seq2.length) {
+                tracebackStep = true;
+                currentTraceI = maxI;
+                currentTraceJ = maxJ;
+                tracebackPath = [[currentTraceI, currentTraceJ]];
+                explanation = `
+                    <p>Matrix computation complete. Maximum score: ${maxScore} at [${maxI},${maxJ}].<br>
+                    Starting traceback from cell [${maxI},${maxJ}].<br>
+                    Traceback follows the directions to build the optimal local alignment.<br>
+                    Click 'Next Step' to trace back one step.</p>`;
+                logEntries.push(explanation);
+                document.getElementById('step-info').innerHTML = explanation;
+                updateLog();
+            }
+
+            updateMatrixDisplay();
+            updateProgress();
+            draw();
+        }
+
+        function performTracebackStep() {
+            if (matrix[currentTraceI][currentTraceJ] === 0) {
+                stepMode = false;
+                document.getElementById('step-btn').disabled = true;
+                clearInterval(autoInterval);
+                let explanation = `
+                    <p>Traceback complete. Final alignment:<br>
+                    Seq1: ${aligned1}<br>Seq2: ${aligned2}<br>Score: ${maxScore}</p>`;
+                logEntries.push(explanation);
+                document.getElementById('step-info').innerHTML = explanation;
+                updateLog();
+                displayAlignment();
+                updateProgress();
+                return;
+            }
+
+            let explanation = `Traceback at cell [${currentTraceI},${currentTraceJ}] (score: ${matrix[currentTraceI][currentTraceJ]}):<br>`;
+            let direction = traceback[currentTraceI][currentTraceJ];
+
+            if (direction === 'diagonal') {
+                aligned1 = seq1[currentTraceJ - 1] + aligned1;
+                aligned2 = seq2[currentTraceI - 1] + aligned2;
+                explanation += `Moving diagonally: Aligned '${seq1[currentTraceJ - 1]}' (Seq1) with '${seq2[currentTraceI - 1]}' (Seq2)<br>`;
+                currentTraceI--;
+                currentTraceJ--;
+            } else if (direction === 'up') {
+                aligned1 = '-' + aligned1;
+                aligned2 = seq2[currentTraceI - 1] + aligned2;
+                explanation += `Moving up: Gap in Seq1, aligned '-' with '${seq2[currentTraceI - 1]}' (Seq2)<br>`;
+                currentTraceI--;
+            } else if (direction === 'left') {
+                aligned1 = seq1[currentTraceJ - 1] + aligned1;
+                aligned2 = '-' + aligned2;
+                explanation += `Moving left: Gap in Seq2, aligned '${seq1[currentTraceJ - 1]}' (Seq1) with '-'<br>`;
+                currentTraceJ--;
+            }
+
+            tracebackPath.push([currentTraceI, currentTraceJ]);
+            explanation += `Current alignment:<br>Seq1: ${aligned1}<br>Seq2: ${aligned2}<br>`;
+            explanation += `Next traceback cell: [${currentTraceI},${currentTraceJ}]`;
+            logEntries.push(explanation);
+            document.getElementById('step-info').innerHTML = explanation;
+            updateLog();
+            updateMatrixDisplay();
+            updateProgress();
+            draw();
+        }
+
+        function updateMatrixDisplay() {
+            let table = '<table><tr><th></th><th>-</th>';
+            for (let c = 0; c < seq1.length; c++) {
+                table += `<th>${seq1[c]}</th>`;
+            }
+            table += '</tr>';
+            for (let r = 0; r <= seq2.length; r++) {
+                table += `<tr><th>${r === 0 ? '-' : seq2[r-1]}</th>`;
+                for (let c = 0; c <= seq1.length; c++) {
+                    let isCurrent = r === i && c === j && !tracebackStep;
+                    let isTraceback = tracebackPath.some(([tr, tc]) => tr === r && tc === c);
+                    let tooltip = calculations[r][c] || 'No calculations yet';
+                    table += `<td class="${isCurrent ? 'highlight' : isTraceback ? 'traceback' : ''} hoverable" title="${tooltip}">${matrix[r][c] || 0}</td>`;
+                }
+                table += '</tr>';
+            }
+            table += '</table>';
+            document.getElementById('matrix-display').innerHTML = '<h3>Scoring Matrix</h3>' + table;
+        }
+
+        function updateLog() {
+            let logContent = document.getElementById('log-content');
+            logContent.innerHTML = logEntries.map(entry => `<p>${entry.replace(/<br>/g, '')}</p>`).join('');
+            logContent.scrollTop = logContent.scrollHeight;
+        }
+
+        function updateProgress() {
+            let totalSteps = seq2.length * seq1.length + tracebackPath.length + 1;
+            let currentStep = tracebackStep ? (seq2.length * seq1.length + tracebackPath.length) : ((i - 1) * seq1.length + j);
+            let progress = (currentStep / totalSteps) * 100;
+            document.getElementById('progress').style.width = `${progress}%`;
+        }
+
+        function displayAlignment() {
+            let resultDiv = document.getElementById('alignment-result');
+            resultDiv.innerHTML = `
+                <h3>Final Alignment Result</h3>
+                <p>Sequence 1: ${aligned1}</p>
+                <p>Sequence 2: ${aligned2}</p>
+                <p>Score: ${maxScore}</p>
+            `;
+        }
+
+        function downloadLog() {
+            let logText = logEntries.map(entry => entry.replace(/<br>/g, '\n').replace(/<[^>]+>/g, '')).join('\n\n');
+            let blob = new Blob([logText], { type: 'text/plain' });
+            let url = URL.createObjectURL(blob);
+            let a = document.createElement('a');
+            a.href = url;
+            a.download = 'smith-waterman-log.txt';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function startAlignment() {
+            clearInterval(autoInterval);
+            initializeMatrix();
+        }
+
+        function resetAlignment() {
+            clearInterval(autoInterval);
+            stepMode = false;
+            tracebackStep = false;
+            matrix = [];
+            traceback = [];
+            calculations = [];
+            tracebackPath = [];
+            logEntries = [];
+            i = 0;
+            j = 0;
+            aligned1 = '';
+            aligned2 = '';
+            document.getElementById('step-btn').disabled = true;
+            document.getElementById('step-info').innerHTML = '';
+            document.getElementById('matrix-display').innerHTML = '';
+            document.getElementById('alignment-result').innerHTML = '';
+            document.getElementById('log-content').innerHTML = '';
+            document.getElementById('progress').style.width = '0%';
+            clear();
+            draw();
+        }
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && document.getElementById('step-btn').disabled === false) {
+                stepForward();
+            } else if (e.key === 'Escape') {
+                resetAlignment();
+            }
+        });
+    </script>
+</body>
+</html>
